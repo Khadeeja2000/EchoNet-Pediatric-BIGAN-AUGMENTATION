@@ -19,4 +19,13 @@ paths:
   output_dir: "data/processed"
   manifest_filename: "manifest.csv"
 
+processing:
+  do_process: true
+  output_videos_dir: "data/processed/videos"
+  width: 128
+  height: 128
+  target_fps: 30
+  max_frames: 96
+  grayscale: true
+
 random_seed: 42

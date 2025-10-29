@@ -89,6 +89,118 @@ def stratified_sample(
     return pd.concat(samples, ignore_index=True)
 
 
+def process_videos(df: pd.DataFrame, cfg: dict, output_dir: Path) -> pd.DataFrame:
+    try:
+        import cv2  # lazy import to avoid dependency unless needed
+    except Exception as e:
+        raise RuntimeError("OpenCV (cv2) is required for processing. Please install opencv-python.") from e
+
+    proc_cfg = cfg.get("processing", {})
+    do_process = proc_cfg.get("do_process", False)
+    if not do_process:
+        return df
+
+    out_videos_dir = Path(proc_cfg.get("output_videos_dir", output_dir / "videos"))
+    width = int(proc_cfg.get("width", 128))
+    height = int(proc_cfg.get("height", 128))
+    target_fps = int(proc_cfg.get("target_fps", 30))
+    max_frames = int(proc_cfg.get("max_frames", 96))
+    grayscale = bool(proc_cfg.get("grayscale", True))
+
+    out_videos_dir.mkdir(parents=True, exist_ok=True)
+
+    processed_paths = []
+    processed_frames = []
+    processed_fps = []
+    processed_widths = []
+    processed_heights = []
+
+    fourcc = None
+
+    for _, row in df.iterrows():
+        src_path = row["file_path"]
+        base = Path(src_path).stem
+        dst_path = str(out_videos_dir / f"{base}.mp4")
+
+        if os.path.exists(dst_path):
+            # If already processed, probe minimal metadata
+            processed_paths.append(dst_path)
+            processed_frames.append(None)
+            processed_fps.append(target_fps)
+            processed_widths.append(width)
+            processed_heights.append(height)
+            continue
+
+        cap = cv2.VideoCapture(src_path)
+        if not cap.isOpened():
+            processed_paths.append("")
+            processed_frames.append(0)
+            processed_fps.append(0)
+            processed_widths.append(0)
+            processed_heights.append(0)
+            continue
+
+        # Determine input fps for frame sampling
+        in_fps = cap.get(cv2.CAP_PROP_FPS)
+        if not in_fps or in_fps <= 0 or in_fps > 240:
+            in_fps = target_fps
+
+        # Compute frame step to approximate target fps
+        frame_step = max(1, int(round(in_fps / target_fps)))
+
+        # Initialize writer lazily
+        writer = None
+        written = 0
+        frame_index = 0
+
+        while True:
+            ret = cap.grab()
+            if not ret:
+                break
+            if frame_index % frame_step != 0:
+                frame_index += 1
+                continue
+            ret, frame = cap.retrieve()
+            if not ret:
+                break
+
+            if grayscale:
+                frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                frame = cv2.resize(frame, (width, height), interpolation=cv2.INTER_AREA)
+                frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)  # replicate channels
+            else:
+                frame = cv2.resize(frame, (width, height), interpolation=cv2.INTER_AREA)
+
+            if writer is None:
+                if fourcc is None:
+                    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+                writer = cv2.VideoWriter(dst_path, fourcc, float(target_fps), (width, height))
+
+            writer.write(frame)
+            written += 1
+            frame_index += 1
+            if written >= max_frames:
+                break
+
+        cap.release()
+        if writer is not None:
+            writer.release()
+
+        processed_paths.append(dst_path if os.path.exists(dst_path) else "")
+        processed_frames.append(written)
+        processed_fps.append(target_fps)
+        processed_widths.append(width)
+        processed_heights.append(height)
+
+    df = df.copy()
+    df["processed_path"] = processed_paths
+    df["processed_frames"] = processed_frames
+    df["processed_fps"] = processed_fps
+    df["processed_width"] = processed_widths
+    df["processed_height"] = processed_heights
+    return df
+
+
 def main(config_path: str) -> None:
     cfg = load_config(config_path)
     dataset_root = Path(cfg["paths"]["dataset_root"]).resolve()
@@ -135,6 +247,10 @@ def main(config_path: str) -> None:
     ]].copy()
 
     output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Optional video processing
+    out_df = process_videos(out_df, cfg, output_dir)
+
     manifest_path = output_dir / manifest_filename
     out_df.to_csv(manifest_path, index=False)
     print(f"Wrote manifest with {len(out_df)} rows to {manifest_path}")
