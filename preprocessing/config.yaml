@@ -1,6 +1,6 @@
 # Preprocessing configuration
 subset:
-  total_samples: 500
+  total_samples: 2000
   views:
     - A4C
     - PSAX
