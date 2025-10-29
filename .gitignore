@@ -1,0 +1,20 @@
+# Ignore macOS files
+.DS_Store
+
+# Ignore raw dataset and large binaries
+Dataset/
+data/raw/
+data/interim/
+data/processed/videos/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Outputs
+logs/
+reports/
+
+
