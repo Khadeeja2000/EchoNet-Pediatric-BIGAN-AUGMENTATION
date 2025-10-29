@@ -155,8 +155,12 @@ def train(cfg: dict) -> None:
     E = Encoder(cfg["z_dim"], cfg["cond_dim"]).to(device)
     D = Discriminator(cfg["z_dim"], cfg["cond_dim"]).to(device)
 
-    opt_G = optim.Adam(list(G.parameters()) + list(E.parameters()), lr=2e-4, betas=(0.5, 0.999))
-    opt_D = optim.Adam(D.parameters(), lr=2e-4, betas=(0.5, 0.999))
+    opt_G = optim.Adam(list(G.parameters()) + list(E.parameters()), lr=cfg["lr"], betas=(0.5, 0.999))
+    opt_D = optim.Adam(D.parameters(), lr=cfg["lr"], betas=(0.5, 0.999))
+
+    # LR schedulers: decay after lr_decay_epoch
+    sched_G = optim.lr_scheduler.StepLR(opt_G, step_size=cfg["lr_decay_epoch"], gamma=cfg["lr_gamma"]) if cfg["lr_decay_epoch"] > 0 else None
+    sched_D = optim.lr_scheduler.StepLR(opt_D, step_size=cfg["lr_decay_epoch"], gamma=cfg["lr_gamma"]) if cfg["lr_decay_epoch"] > 0 else None
 
     last_loss_GE = torch.tensor(0.0)
     for epoch in range(cfg["epochs"]):
@@ -165,6 +169,7 @@ def train(cfg: dict) -> None:
             cond = cond.to(device)
             z = torch.randn(real_x.size(0), cfg["z_dim"], device=device)
 
+            # Train D
             opt_D.zero_grad()
             fake_x = G(z, cond)
             enc_z = E(real_x, cond)
@@ -175,8 +180,11 @@ def train(cfg: dict) -> None:
 
             loss_D = -(torch.mean(real_score) - torch.mean(fake_score)) + cfg["lambda_gp"] * gp
             loss_D.backward()
+            if cfg["clip_grad"] > 0:
+                torch.nn.utils.clip_grad_norm_(D.parameters(), cfg["clip_grad"])
             opt_D.step()
 
+            # Train G + E
             if i % cfg["n_critic"] == 0:
                 opt_G.zero_grad()
                 fake_x = G(z, cond)
@@ -186,6 +194,8 @@ def train(cfg: dict) -> None:
                 loss_GE = -(torch.mean(fake_score) + torch.mean(real_score))
                 last_loss_GE = loss_GE.detach()
                 loss_GE.backward()
+                if cfg["clip_grad"] > 0:
+                    torch.nn.utils.clip_grad_norm_(list(G.parameters()) + list(E.parameters()), cfg["clip_grad"])
                 opt_G.step()
 
             if i % 10 == 0:
@@ -196,6 +206,11 @@ def train(cfg: dict) -> None:
         torch.save(G.state_dict(), f"checkpoints/G_epoch{epoch}.pt")
         torch.save(E.state_dict(), f"checkpoints/E_epoch{epoch}.pt")
         torch.save(D.state_dict(), f"checkpoints/D_epoch{epoch}.pt")
+
+        if sched_G is not None:
+            sched_G.step()
+        if sched_D is not None:
+            sched_D.step()
 
 
 if __name__ == "__main__":
@@ -209,6 +224,10 @@ if __name__ == "__main__":
     parser.add_argument("--size", type=int, default=128)
     parser.add_argument("--lambda_gp", type=float, default=10.0)
     parser.add_argument("--n_critic", type=int, default=5)
+    parser.add_argument("--clip_grad", type=float, default=1.0)
+    parser.add_argument("--lr", type=float, default=2e-4)
+    parser.add_argument("--lr_decay_epoch", type=int, default=15)
+    parser.add_argument("--lr_gamma", type=float, default=0.5)
     args = parser.parse_args()
 
     cfg = vars(args)

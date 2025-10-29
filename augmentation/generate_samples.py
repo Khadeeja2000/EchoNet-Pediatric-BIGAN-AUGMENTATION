@@ -29,9 +29,8 @@ class Generator(nn.Module):
 
 
 def save_video(tensor: torch.Tensor, path: str, fps: int = 30) -> None:
-    # tensor: (1, T, H, W) in [-1,1]
-    x = tensor.squeeze(0).detach().cpu().numpy()  # (T, H, W)
-    x = (x + 1.0) * 0.5  # [0,1]
+    x = tensor.squeeze(0).detach().cpu().numpy()
+    x = (x + 1.0) * 0.5
     x = (x * 255.0).clip(0, 255).astype(np.uint8)
     h, w = x.shape[1], x.shape[2]
     fourcc = cv2.VideoWriter_fourcc(*"mp4v")
@@ -48,8 +47,8 @@ def main() -> None:
     parser.add_argument("--checkpoint", type=str, default="checkpoints/G_epoch0.pt")
     parser.add_argument("--z_dim", type=int, default=128)
     parser.add_argument("--cond_dim", type=int, default=2)
-    parser.add_argument("--num_per_cond", type=int, default=2)
-    parser.add_argument("--outdir", type=str, default="augmentation/samples")
+    parser.add_argument("--num_samples", type=int, default=20)
+    parser.add_argument("--out_dir", type=str, default="augmentation/samples")
     parser.add_argument("--fps", type=int, default=30)
     args = parser.parse_args()
 
@@ -60,27 +59,23 @@ def main() -> None:
     G.load_state_dict(state)
     G.eval()
 
-    Path(args.outdir).mkdir(parents=True, exist_ok=True)
+    Path(args.out_dir).mkdir(parents=True, exist_ok=True)
 
-    # Conditions aligned with preprocessing: sex {F=0, M=1}, age bins {"0-1":0, "2-5":1, "6-10":2, "11-15":3, "16-18":4, "other":5}
     sex_vals = [0.0, 1.0]
     age_bins = [0.0, 1.0, 2.0, 3.0, 4.0]
+    cond_list = [(s, a) for s in sex_vals for a in age_bins]
 
-    idx = 0
-    for sex in sex_vals:
-        for age in age_bins:
-            for k in range(args.num_per_cond):
-                z = torch.randn(1, args.z_dim, device=device)
-                c = torch.tensor([[sex, age]], dtype=torch.float32, device=device)
-                with torch.no_grad():
-                    x = G(z, c)  # (1, 1, 32, 32, 32)
-                # Reorder to (1, T, H, W)
-                x_reordered = x[:, 0]  # (1, 32, 32, 32)
-                out_path = os.path.join(args.outdir, f"sample_s{int(sex)}_a{int(age)}_{idx}.mp4")
-                save_video(x_reordered, out_path, fps=args.fps)
-                idx += 1
+    for idx in range(args.num_samples):
+        sex, age = cond_list[idx % len(cond_list)]
+        z = torch.randn(1, args.z_dim, device=device)
+        c = torch.tensor([[sex, age]], dtype=torch.float32, device=device)
+        with torch.no_grad():
+            x = G(z, c)
+        x_reordered = x[:, 0]
+        out_path = os.path.join(args.out_dir, f"sample_{idx:03d}_s{int(sex)}_a{int(age)}.mp4")
+        save_video(x_reordered, out_path, fps=args.fps)
 
-    print(f"Saved {idx} samples to {args.outdir}")
+    print(f"Saved {args.num_samples} samples to {args.out_dir}")
 
 
 if __name__ == "__main__":
