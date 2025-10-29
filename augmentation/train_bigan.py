@@ -158,6 +158,7 @@ def train(cfg: dict) -> None:
     opt_G = optim.Adam(list(G.parameters()) + list(E.parameters()), lr=2e-4, betas=(0.5, 0.999))
     opt_D = optim.Adam(D.parameters(), lr=2e-4, betas=(0.5, 0.999))
 
+    last_loss_GE = torch.tensor(0.0)
     for epoch in range(cfg["epochs"]):
         for i, (real_x, cond) in enumerate(loader):
             real_x = real_x.to(device)
@@ -183,16 +184,18 @@ def train(cfg: dict) -> None:
                 fake_score = D(fake_x, z, cond)
                 real_score = D(real_x, enc_z, cond)
                 loss_GE = -(torch.mean(fake_score) + torch.mean(real_score))
+                last_loss_GE = loss_GE.detach()
                 loss_GE.backward()
                 opt_G.step()
 
             if i % 10 == 0:
-                print(f"[Epoch {epoch}/{cfg['epochs']}] [Batch {i}/{len(loader)}] Loss_D: {loss_D.item():.4f}")
+                ge_val = last_loss_GE.item() if isinstance(last_loss_GE, torch.Tensor) else float(last_loss_GE)
+                print(f"[Epoch {epoch}/{cfg['epochs']}] [Batch {i}/{len(loader)}] Loss_D: {loss_D.item():.4f}, Loss_GE: {ge_val:.4f}")
 
-        Path("augmentation/checkpoints").mkdir(parents=True, exist_ok=True)
-        torch.save(G.state_dict(), f"augmentation/checkpoints/G_epoch{epoch}.pt")
-        torch.save(E.state_dict(), f"augmentation/checkpoints/E_epoch{epoch}.pt")
-        torch.save(D.state_dict(), f"augmentation/checkpoints/D_epoch{epoch}.pt")
+        Path("checkpoints").mkdir(parents=True, exist_ok=True)
+        torch.save(G.state_dict(), f"checkpoints/G_epoch{epoch}.pt")
+        torch.save(E.state_dict(), f"checkpoints/E_epoch{epoch}.pt")
+        torch.save(D.state_dict(), f"checkpoints/D_epoch{epoch}.pt")
 
 
 if __name__ == "__main__":
