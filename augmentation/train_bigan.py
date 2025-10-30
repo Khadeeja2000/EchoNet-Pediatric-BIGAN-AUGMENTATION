@@ -64,38 +64,35 @@ class Generator(nn.Module):
     def __init__(self, z_dim: int = 128, cond_dim: int = 2, channels: int = 1, size: int = 64):
         super().__init__()
         self.size = size
-        # For 64x64: start from 4x4x4, upscale to 8x8x8, 16x16x16, 32x32x32, 64x64x32
+        # Start from 4x4x4
         self.fc = nn.Linear(z_dim + cond_dim, 512 * 4 * 4 * 4)
         layers = []
-        # First upscale: 4 -> 8
+        
+        # Upsample uniformly to 32x32x32
         layers.extend([
-            nn.ConvTranspose3d(512, 256, 4, 2, 1),
+            nn.ConvTranspose3d(512, 256, 4, 2, 1),  # 4 -> 8
             nn.BatchNorm3d(256),
             nn.ReLU(True),
-        ])
-        # 8 -> 16
-        layers.extend([
-            nn.ConvTranspose3d(256, 128, 4, 2, 1),
+            nn.ConvTranspose3d(256, 128, 4, 2, 1),  # 8 -> 16
             nn.BatchNorm3d(128),
             nn.ReLU(True),
+            nn.ConvTranspose3d(128, 64, 4, 2, 1),   # 16 -> 32
+            nn.BatchNorm3d(64),
+            nn.ReLU(True),
         ])
-        if size >= 64:
-            # 16 -> 32
+        
+        if size > 32:
+            # For 64x64: upsample only spatial dimensions (keep temporal at 32)
+            # kernel_size=(1,4,4), stride=(1,2,2), padding=(0,1,1)
             layers.extend([
-                nn.ConvTranspose3d(128, 64, 4, 2, 1),
-                nn.BatchNorm3d(64),
-                nn.ReLU(True),
-            ])
-            # 32 -> 64 (for both size=64 and size>=128)
-            layers.extend([
-                nn.ConvTranspose3d(64, 32, 4, 2, 1),
+                nn.ConvTranspose3d(64, 32, kernel_size=(1, 4, 4), stride=(1, 2, 2), padding=(0, 1, 1)),
                 nn.BatchNorm3d(32),
                 nn.ReLU(True),
             ])
-            if size >= 128:
-                # Additional upscale for 128+
+            if size > 64:
+                # For 128x128: another spatial-only upsample
                 layers.extend([
-                    nn.ConvTranspose3d(32, 16, 4, 2, 1),
+                    nn.ConvTranspose3d(32, 16, kernel_size=(1, 4, 4), stride=(1, 2, 2), padding=(0, 1, 1)),
                     nn.BatchNorm3d(16),
                     nn.ReLU(True),
                 ])
@@ -103,7 +100,7 @@ class Generator(nn.Module):
             else:
                 layers.append(nn.ConvTranspose3d(32, channels, 3, 1, 1))
         else:
-            layers.append(nn.ConvTranspose3d(128, channels, 3, 1, 1))
+            layers.append(nn.ConvTranspose3d(64, channels, 3, 1, 1))
         
         layers.append(nn.Tanh())
         self.net = nn.Sequential(*layers)
@@ -231,6 +228,8 @@ def train(cfg: dict) -> None:
             gp = gradient_penalty(D, real_x, fake_x, z, cond, device)
 
             loss_D = -(torch.mean(real_score) - torch.mean(fake_score)) + cfg["lambda_gp"] * gp
+            # Clamp loss for stability
+            loss_D = torch.clamp(loss_D, min=-1000, max=1000)
             loss_D.backward()
             if cfg["clip_grad"] > 0:
                 torch.nn.utils.clip_grad_norm_(D.parameters(), cfg["clip_grad"])
@@ -244,6 +243,8 @@ def train(cfg: dict) -> None:
                 fake_score = D(fake_x, z, cond)
                 real_score = D(real_x, enc_z, cond)
                 loss_GE = -(torch.mean(fake_score) + torch.mean(real_score))
+                # Clamp loss for stability
+                loss_GE = torch.clamp(loss_GE, min=-1000, max=1000)
                 last_loss_GE = loss_GE.detach()
                 loss_GE.backward()
                 if cfg["clip_grad"] > 0:
@@ -274,10 +275,10 @@ if __name__ == "__main__":
     parser.add_argument("--cond_dim", type=int, default=2)
     parser.add_argument("--frames", type=int, default=32)
     parser.add_argument("--size", type=int, default=128)
-    parser.add_argument("--lambda_gp", type=float, default=2.5)
+    parser.add_argument("--lambda_gp", type=float, default=10.0)
     parser.add_argument("--n_critic", type=int, default=5)
     parser.add_argument("--clip_grad", type=float, default=1.0)
-    parser.add_argument("--lr", type=float, default=2e-4)
+    parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--lr_decay_epoch", type=int, default=15)
     parser.add_argument("--lr_gamma", type=float, default=0.5)
     args = parser.parse_args()
