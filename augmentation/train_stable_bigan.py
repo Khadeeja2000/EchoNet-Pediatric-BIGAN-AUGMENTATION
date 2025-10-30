@@ -12,7 +12,7 @@ import cv2
 
 
 class EchoDataset(Dataset):
-    def __init__(self, manifest_csv: str, frames: int = 32, size: int = 32):
+    def __init__(self, manifest_csv: str, frames: int = 32, size: int = 64):
         self.df = pd.read_csv(manifest_csv)
         if "processed_path" in self.df.columns:
             self.df = self.df[self.df["processed_path"].astype(str).str.len() > 0].reset_index(drop=True)
@@ -61,25 +61,34 @@ class EchoDataset(Dataset):
 class Generator(nn.Module):
     def __init__(self, z_dim: int = 100, cond_dim: int = 2, channels: int = 1):
         super().__init__()
-        self.fc = nn.Linear(z_dim + cond_dim, 256 * 4 * 4 * 4)
-        
-        self.net = nn.Sequential(
-            # 4 -> 8
+        self.fc = nn.Linear(z_dim + cond_dim, 512 * 4 * 4 * 4)
+
+        layers = []
+        # 4 -> 8 -> 16 -> 32 (upsample time and spatial)
+        layers.extend([
+            nn.ConvTranspose3d(512, 256, 4, 2, 1),
+            nn.BatchNorm3d(256),
+            nn.ReLU(True),
             nn.ConvTranspose3d(256, 128, 4, 2, 1),
             nn.BatchNorm3d(128),
             nn.ReLU(True),
-            # 8 -> 16
             nn.ConvTranspose3d(128, 64, 4, 2, 1),
             nn.BatchNorm3d(64),
             nn.ReLU(True),
-            # 16 -> 32
-            nn.ConvTranspose3d(64, channels, 4, 2, 1),
-            nn.Tanh()
-        )
+        ])
+        # 32 -> 64 (spatial-only)
+        layers.extend([
+            nn.ConvTranspose3d(64, 32, kernel_size=(1, 4, 4), stride=(1, 2, 2), padding=(0, 1, 1)),
+            nn.BatchNorm3d(32),
+            nn.ReLU(True),
+            nn.ConvTranspose3d(32, channels, 3, 1, 1),
+            nn.Tanh(),
+        ])
+        self.net = nn.Sequential(*layers)
 
     def forward(self, z: torch.Tensor, c: torch.Tensor) -> torch.Tensor:
         x = torch.cat([z, c], dim=1)
-        x = self.fc(x).view(-1, 256, 4, 4, 4)
+        x = self.fc(x).view(-1, 512, 4, 4, 4)
         return self.net(x)
 
 
@@ -87,19 +96,23 @@ class Encoder(nn.Module):
     def __init__(self, z_dim: int = 100, cond_dim: int = 2, channels: int = 1):
         super().__init__()
         self.net = nn.Sequential(
-            # 32 -> 16
-            nn.Conv3d(channels, 64, 4, 2, 1),
+            # 64 -> 32 (spatial-only)
+            nn.Conv3d(channels, 64, kernel_size=(1, 4, 4), stride=(1, 2, 2), padding=(0, 1, 1)),
             nn.LeakyReLU(0.2),
-            # 16 -> 8
+            # 32 -> 16
             nn.Conv3d(64, 128, 4, 2, 1),
             nn.BatchNorm3d(128),
             nn.LeakyReLU(0.2),
-            # 8 -> 4
+            # 16 -> 8
             nn.Conv3d(128, 256, 4, 2, 1),
             nn.BatchNorm3d(256),
             nn.LeakyReLU(0.2),
+            # 8 -> 4
+            nn.Conv3d(256, 512, 4, 2, 1),
+            nn.BatchNorm3d(512),
+            nn.LeakyReLU(0.2),
         )
-        self.fc = nn.Linear(256 * 4 * 4 * 4 + cond_dim, z_dim)
+        self.fc = nn.Linear(512 * 4 * 4 * 4 + cond_dim, z_dim)
 
     def forward(self, x: torch.Tensor, c: torch.Tensor) -> torch.Tensor:
         x = self.net(x)
@@ -112,23 +125,26 @@ class Discriminator(nn.Module):
     def __init__(self, z_dim: int = 100, cond_dim: int = 2, channels: int = 1):
         super().__init__()
         self.video_path = nn.Sequential(
-            # 32 -> 16
-            nn.Conv3d(channels, 64, 4, 2, 1),
+            # 64 -> 32 (spatial-only)
+            nn.Conv3d(channels, 64, kernel_size=(1, 4, 4), stride=(1, 2, 2), padding=(0, 1, 1)),
             nn.LeakyReLU(0.2),
-            # 16 -> 8  
+            # 32 -> 16
             nn.Conv3d(64, 128, 4, 2, 1),
             nn.BatchNorm3d(128),
             nn.LeakyReLU(0.2),
-            # 8 -> 4
+            # 16 -> 8
             nn.Conv3d(128, 256, 4, 2, 1),
             nn.BatchNorm3d(256),
             nn.LeakyReLU(0.2),
+            # 8 -> 4
+            nn.Conv3d(256, 512, 4, 2, 1),
+            nn.BatchNorm3d(512),
+            nn.LeakyReLU(0.2),
         )
         self.fc = nn.Sequential(
-            nn.Linear(256 * 4 * 4 * 4 + z_dim + cond_dim, 512),
+            nn.Linear(512 * 4 * 4 * 4 + z_dim + cond_dim, 512),
             nn.LeakyReLU(0.2),
             nn.Linear(512, 1),
-            nn.Sigmoid()  # For BCE loss
         )
 
     def forward(self, x: torch.Tensor, z: torch.Tensor, c: torch.Tensor) -> torch.Tensor:
@@ -147,15 +163,21 @@ def train(cfg: dict) -> None:
         device = "cpu"
     print(f"Using device: {device}")
     
-    dataset = EchoDataset(cfg["manifest"], frames=32, size=32)
+    dataset = EchoDataset(cfg["manifest"], frames=32, size=64)
     loader = DataLoader(dataset, batch_size=cfg["batch_size"], shuffle=True, num_workers=2, drop_last=True)
 
     G = Generator(cfg["z_dim"], cfg["cond_dim"]).to(device)
     E = Encoder(cfg["z_dim"], cfg["cond_dim"]).to(device)
     D = Discriminator(cfg["z_dim"], cfg["cond_dim"]).to(device)
 
-    # Use BCE loss for stability
-    criterion = nn.BCELoss()
+    # Hinge loss helpers (more contrastive, often sharper)
+    def d_hinge_loss(real_logits, fake_logits):
+        loss_real = torch.relu(1.0 - real_logits).mean()
+        loss_fake = torch.relu(1.0 + fake_logits).mean()
+        return loss_real + loss_fake
+
+    def g_hinge_loss(fake_logits):
+        return (-fake_logits).mean()
     
     # Use Adam with conservative learning rates
     opt_G = optim.Adam(list(G.parameters()) + list(E.parameters()), lr=2e-4, betas=(0.5, 0.999))
@@ -168,45 +190,34 @@ def train(cfg: dict) -> None:
             cond = cond.to(device)
             batch_size = real_x.size(0)
             
-            # Real and fake labels
-            real_label = torch.ones(batch_size, 1, device=device) * 0.9  # Label smoothing
-            fake_label = torch.zeros(batch_size, 1, device=device) + 0.1
-            
             # Sample z
             z = torch.randn(batch_size, cfg["z_dim"], device=device)
             
             # ============ Train Discriminator ============
             opt_D.zero_grad()
             
-            # Real data
+            # Real/Fake logits
             enc_z = E(real_x, cond)
-            real_pred = D(real_x, enc_z.detach(), cond)
-            real_loss = criterion(real_pred, real_label)
-            
-            # Fake data
+            real_logits = D(real_x, enc_z.detach(), cond)
             fake_x = G(z, cond)
-            fake_pred = D(fake_x.detach(), z.detach(), cond)
-            fake_loss = criterion(fake_pred, fake_label)
-            
-            # Total discriminator loss
-            d_loss = real_loss + fake_loss
+            fake_logits = D(fake_x.detach(), z.detach(), cond)
+            # Hinge D loss
+            d_loss = d_hinge_loss(real_logits, fake_logits)
             d_loss.backward()
             opt_D.step()
             
             # ============ Train Generator & Encoder ============
             opt_G.zero_grad()
             
-            # Generator wants to fool discriminator
+            # Generator/Encoder hinge objective
             fake_x = G(z, cond)
-            fake_pred = D(fake_x, z, cond)
-            g_loss = criterion(fake_pred, real_label)
-            
-            # Encoder reconstruction
+            fake_logits = D(fake_x, z, cond)
+            g_loss = g_hinge_loss(fake_logits)
+
             enc_z = E(real_x, cond)
-            real_pred = D(real_x, enc_z, cond)
-            e_loss = criterion(real_pred, real_label)
-            
-            # Total generator/encoder loss
+            real_logits = D(real_x, enc_z, cond)
+            e_loss = (-real_logits).mean()
+
             ge_loss = g_loss + e_loss
             ge_loss.backward()
             opt_G.step()
