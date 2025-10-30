@@ -86,16 +86,22 @@ class Generator(nn.Module):
                 nn.BatchNorm3d(64),
                 nn.ReLU(True),
             ])
+            # 32 -> 64 (for both size=64 and size>=128)
+            layers.extend([
+                nn.ConvTranspose3d(64, 32, 4, 2, 1),
+                nn.BatchNorm3d(32),
+                nn.ReLU(True),
+            ])
             if size >= 128:
-                # 32 -> 64 (if needed)
+                # Additional upscale for 128+
                 layers.extend([
-                    nn.ConvTranspose3d(64, 32, 4, 2, 1),
-                    nn.BatchNorm3d(32),
+                    nn.ConvTranspose3d(32, 16, 4, 2, 1),
+                    nn.BatchNorm3d(16),
                     nn.ReLU(True),
                 ])
-                layers.append(nn.ConvTranspose3d(32, channels, 3, 1, 1))
+                layers.append(nn.ConvTranspose3d(16, channels, 3, 1, 1))
             else:
-                layers.append(nn.ConvTranspose3d(64, channels, 3, 1, 1))
+                layers.append(nn.ConvTranspose3d(32, channels, 3, 1, 1))
         else:
             layers.append(nn.ConvTranspose3d(128, channels, 3, 1, 1))
         
@@ -109,7 +115,7 @@ class Generator(nn.Module):
 
 
 class Encoder(nn.Module):
-    def __init__(self, z_dim: int = 128, cond_dim: int = 2, channels: int = 1, size: int = 64):
+    def __init__(self, z_dim: int = 128, cond_dim: int = 2, channels: int = 1, size: int = 64, frames: int = 32):
         super().__init__()
         layers = [
             nn.Conv3d(channels, 64, 4, 2, 1),
@@ -126,21 +132,22 @@ class Encoder(nn.Module):
             layers.append(nn.Conv3d(256, 512, 4, 2, 1))
             layers.append(nn.BatchNorm3d(512))
             layers.append(nn.LeakyReLU(0.2, inplace=True))
-            fc_dim = 512 * 4 * 4 * 4
-        else:
-            fc_dim = 256 * 4 * 4 * 4
         self.net = nn.Sequential(*layers)
-        self.fc = nn.Linear(fc_dim + cond_dim, z_dim)
+        self.adaptive_pool = nn.AdaptiveAvgPool3d((4, 4, 4))
+        final_channels = 512 if size >= 64 else 256
+        self.fc = nn.Linear(final_channels * 4 * 4 * 4 + cond_dim, z_dim)
 
     def forward(self, x: torch.Tensor, c: torch.Tensor) -> torch.Tensor:
         b = x.size(0)
-        x = self.net(x).view(b, -1)
+        x = self.net(x)
+        x = self.adaptive_pool(x)
+        x = x.view(b, -1)
         x = torch.cat([x, c], dim=1)
         return self.fc(x)
 
 
 class Discriminator(nn.Module):
-    def __init__(self, z_dim: int = 128, cond_dim: int = 2, channels: int = 1, size: int = 64):
+    def __init__(self, z_dim: int = 128, cond_dim: int = 2, channels: int = 1, size: int = 64, frames: int = 32):
         super().__init__()
         layers = [
             nn.Conv3d(channels, 64, 4, 2, 1),
@@ -158,19 +165,20 @@ class Discriminator(nn.Module):
                 nn.BatchNorm3d(512),
                 nn.LeakyReLU(0.2, inplace=True),
             ])
-            fc_dim = 512 * 4 * 4 * 4
-        else:
-            fc_dim = 256 * 4 * 4 * 4
         self.video_path = nn.Sequential(*layers)
+        self.adaptive_pool = nn.AdaptiveAvgPool3d((4, 4, 4))
+        final_channels = 512 if size >= 64 else 256
         self.fc = nn.Sequential(
-            nn.Linear(fc_dim + z_dim + cond_dim, 512),
+            nn.Linear(final_channels * 4 * 4 * 4 + z_dim + cond_dim, 512),
             nn.LeakyReLU(0.2, inplace=True),
             nn.Linear(512, 1),
         )
 
     def forward(self, x: torch.Tensor, z: torch.Tensor, c: torch.Tensor) -> torch.Tensor:
         b = x.size(0)
-        x = self.video_path(x).view(b, -1)
+        x = self.video_path(x)
+        x = self.adaptive_pool(x)
+        x = x.view(b, -1)
         x = torch.cat([x, z, c], dim=1)
         return self.fc(x)
 
@@ -197,8 +205,8 @@ def train(cfg: dict) -> None:
     loader = DataLoader(dataset, batch_size=cfg["batch_size"], shuffle=True, num_workers=2, drop_last=True)
 
     G = Generator(cfg["z_dim"], cfg["cond_dim"], size=cfg["size"]).to(device)
-    E = Encoder(cfg["z_dim"], cfg["cond_dim"], size=cfg["size"]).to(device)
-    D = Discriminator(cfg["z_dim"], cfg["cond_dim"], size=cfg["size"]).to(device)
+    E = Encoder(cfg["z_dim"], cfg["cond_dim"], size=cfg["size"], frames=cfg["frames"]).to(device)
+    D = Discriminator(cfg["z_dim"], cfg["cond_dim"], size=cfg["size"], frames=cfg["frames"]).to(device)
 
     opt_G = optim.Adam(list(G.parameters()) + list(E.parameters()), lr=cfg["lr"], betas=(0.5, 0.999))
     opt_D = optim.Adam(D.parameters(), lr=cfg["lr"], betas=(0.5, 0.999))
@@ -218,7 +226,6 @@ def train(cfg: dict) -> None:
             opt_D.zero_grad()
             fake_x = G(z, cond)
             enc_z = E(real_x, cond)
-
             real_score = D(real_x, enc_z.detach(), cond)
             fake_score = D(fake_x.detach(), z.detach(), cond)
             gp = gradient_penalty(D, real_x, fake_x, z, cond, device)
