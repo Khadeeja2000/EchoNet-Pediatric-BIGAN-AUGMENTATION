@@ -61,30 +61,57 @@ class EchoDataset(Dataset):
 
 
 class Generator(nn.Module):
-    def __init__(self, z_dim: int = 128, cond_dim: int = 2, channels: int = 1):
+    def __init__(self, z_dim: int = 128, cond_dim: int = 2, channels: int = 1, size: int = 64):
         super().__init__()
-        self.fc = nn.Linear(z_dim + cond_dim, 256 * 4 * 4 * 4)
-        self.net = nn.Sequential(
+        self.size = size
+        # For 64x64: start from 4x4x4, upscale to 8x8x8, 16x16x16, 32x32x32, 64x64x32
+        self.fc = nn.Linear(z_dim + cond_dim, 512 * 4 * 4 * 4)
+        layers = []
+        # First upscale: 4 -> 8
+        layers.extend([
+            nn.ConvTranspose3d(512, 256, 4, 2, 1),
+            nn.BatchNorm3d(256),
+            nn.ReLU(True),
+        ])
+        # 8 -> 16
+        layers.extend([
             nn.ConvTranspose3d(256, 128, 4, 2, 1),
             nn.BatchNorm3d(128),
             nn.ReLU(True),
-            nn.ConvTranspose3d(128, 64, 4, 2, 1),
-            nn.BatchNorm3d(64),
-            nn.ReLU(True),
-            nn.ConvTranspose3d(64, channels, 4, 2, 1),
-            nn.Tanh(),
-        )
+        ])
+        if size >= 64:
+            # 16 -> 32
+            layers.extend([
+                nn.ConvTranspose3d(128, 64, 4, 2, 1),
+                nn.BatchNorm3d(64),
+                nn.ReLU(True),
+            ])
+            if size >= 128:
+                # 32 -> 64 (if needed)
+                layers.extend([
+                    nn.ConvTranspose3d(64, 32, 4, 2, 1),
+                    nn.BatchNorm3d(32),
+                    nn.ReLU(True),
+                ])
+                layers.append(nn.ConvTranspose3d(32, channels, 3, 1, 1))
+            else:
+                layers.append(nn.ConvTranspose3d(64, channels, 3, 1, 1))
+        else:
+            layers.append(nn.ConvTranspose3d(128, channels, 3, 1, 1))
+        
+        layers.append(nn.Tanh())
+        self.net = nn.Sequential(*layers)
 
     def forward(self, z: torch.Tensor, c: torch.Tensor) -> torch.Tensor:
         x = torch.cat([z, c], dim=1)
-        x = self.fc(x).view(-1, 256, 4, 4, 4)
+        x = self.fc(x).view(-1, 512, 4, 4, 4)
         return self.net(x)
 
 
 class Encoder(nn.Module):
-    def __init__(self, z_dim: int = 128, cond_dim: int = 2, channels: int = 1):
+    def __init__(self, z_dim: int = 128, cond_dim: int = 2, channels: int = 1, size: int = 64):
         super().__init__()
-        self.net = nn.Sequential(
+        layers = [
             nn.Conv3d(channels, 64, 4, 2, 1),
             nn.BatchNorm3d(64),
             nn.LeakyReLU(0.2, inplace=True),
@@ -94,8 +121,16 @@ class Encoder(nn.Module):
             nn.Conv3d(128, 256, 4, 2, 1),
             nn.BatchNorm3d(256),
             nn.LeakyReLU(0.2, inplace=True),
-        )
-        self.fc = nn.Linear(256 * 4 * 4 * 4 + cond_dim, z_dim)
+        ]
+        if size >= 64:
+            layers.append(nn.Conv3d(256, 512, 4, 2, 1))
+            layers.append(nn.BatchNorm3d(512))
+            layers.append(nn.LeakyReLU(0.2, inplace=True))
+            fc_dim = 512 * 4 * 4 * 4
+        else:
+            fc_dim = 256 * 4 * 4 * 4
+        self.net = nn.Sequential(*layers)
+        self.fc = nn.Linear(fc_dim + cond_dim, z_dim)
 
     def forward(self, x: torch.Tensor, c: torch.Tensor) -> torch.Tensor:
         b = x.size(0)
@@ -105,9 +140,9 @@ class Encoder(nn.Module):
 
 
 class Discriminator(nn.Module):
-    def __init__(self, z_dim: int = 128, cond_dim: int = 2, channels: int = 1):
+    def __init__(self, z_dim: int = 128, cond_dim: int = 2, channels: int = 1, size: int = 64):
         super().__init__()
-        self.video_path = nn.Sequential(
+        layers = [
             nn.Conv3d(channels, 64, 4, 2, 1),
             nn.LeakyReLU(0.2, inplace=True),
             nn.Conv3d(64, 128, 4, 2, 1),
@@ -116,9 +151,19 @@ class Discriminator(nn.Module):
             nn.Conv3d(128, 256, 4, 2, 1),
             nn.BatchNorm3d(256),
             nn.LeakyReLU(0.2, inplace=True),
-        )
+        ]
+        if size >= 64:
+            layers.extend([
+                nn.Conv3d(256, 512, 4, 2, 1),
+                nn.BatchNorm3d(512),
+                nn.LeakyReLU(0.2, inplace=True),
+            ])
+            fc_dim = 512 * 4 * 4 * 4
+        else:
+            fc_dim = 256 * 4 * 4 * 4
+        self.video_path = nn.Sequential(*layers)
         self.fc = nn.Sequential(
-            nn.Linear(256 * 4 * 4 * 4 + z_dim + cond_dim, 512),
+            nn.Linear(fc_dim + z_dim + cond_dim, 512),
             nn.LeakyReLU(0.2, inplace=True),
             nn.Linear(512, 1),
         )
@@ -151,9 +196,9 @@ def train(cfg: dict) -> None:
     dataset = EchoDataset(cfg["manifest"], frames=cfg["frames"], size=cfg["size"])
     loader = DataLoader(dataset, batch_size=cfg["batch_size"], shuffle=True, num_workers=2, drop_last=True)
 
-    G = Generator(cfg["z_dim"], cfg["cond_dim"]).to(device)
-    E = Encoder(cfg["z_dim"], cfg["cond_dim"]).to(device)
-    D = Discriminator(cfg["z_dim"], cfg["cond_dim"]).to(device)
+    G = Generator(cfg["z_dim"], cfg["cond_dim"], size=cfg["size"]).to(device)
+    E = Encoder(cfg["z_dim"], cfg["cond_dim"], size=cfg["size"]).to(device)
+    D = Discriminator(cfg["z_dim"], cfg["cond_dim"], size=cfg["size"]).to(device)
 
     opt_G = optim.Adam(list(G.parameters()) + list(E.parameters()), lr=cfg["lr"], betas=(0.5, 0.999))
     opt_D = optim.Adam(D.parameters(), lr=cfg["lr"], betas=(0.5, 0.999))
@@ -222,7 +267,7 @@ if __name__ == "__main__":
     parser.add_argument("--cond_dim", type=int, default=2)
     parser.add_argument("--frames", type=int, default=32)
     parser.add_argument("--size", type=int, default=128)
-    parser.add_argument("--lambda_gp", type=float, default=10.0)
+    parser.add_argument("--lambda_gp", type=float, default=2.5)
     parser.add_argument("--n_critic", type=int, default=5)
     parser.add_argument("--clip_grad", type=float, default=1.0)
     parser.add_argument("--lr", type=float, default=2e-4)

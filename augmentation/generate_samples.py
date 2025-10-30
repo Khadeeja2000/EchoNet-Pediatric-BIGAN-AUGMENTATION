@@ -8,23 +8,36 @@ import cv2
 
 
 class Generator(nn.Module):
-    def __init__(self, z_dim: int = 128, cond_dim: int = 2, channels: int = 1):
+    def __init__(self, z_dim: int = 128, cond_dim: int = 2, channels: int = 1, size: int = 64):
         super().__init__()
-        self.fc = nn.Linear(z_dim + cond_dim, 256 * 4 * 4 * 4)
-        self.net = nn.Sequential(
+        self.size = size
+        self.fc = nn.Linear(z_dim + cond_dim, 512 * 4 * 4 * 4)
+        layers = []
+        layers.extend([
+            nn.ConvTranspose3d(512, 256, 4, 2, 1),
+            nn.BatchNorm3d(256),
+            nn.ReLU(True),
+        ])
+        layers.extend([
             nn.ConvTranspose3d(256, 128, 4, 2, 1),
             nn.BatchNorm3d(128),
             nn.ReLU(True),
-            nn.ConvTranspose3d(128, 64, 4, 2, 1),
-            nn.BatchNorm3d(64),
-            nn.ReLU(True),
-            nn.ConvTranspose3d(64, channels, 4, 2, 1),
-            nn.Tanh(),
-        )
+        ])
+        if size >= 64:
+            layers.extend([
+                nn.ConvTranspose3d(128, 64, 4, 2, 1),
+                nn.BatchNorm3d(64),
+                nn.ReLU(True),
+            ])
+            layers.append(nn.ConvTranspose3d(64, channels, 3, 1, 1))
+        else:
+            layers.append(nn.ConvTranspose3d(128, channels, 3, 1, 1))
+        layers.append(nn.Tanh())
+        self.net = nn.Sequential(*layers)
 
     def forward(self, z: torch.Tensor, c: torch.Tensor) -> torch.Tensor:
         x = torch.cat([z, c], dim=1)
-        x = self.fc(x).view(-1, 256, 4, 4, 4)
+        x = self.fc(x).view(-1, 512, 4, 4, 4)
         return self.net(x)
 
 
@@ -50,11 +63,12 @@ def main() -> None:
     parser.add_argument("--num_samples", type=int, default=20)
     parser.add_argument("--out_dir", type=str, default="augmentation/samples")
     parser.add_argument("--fps", type=int, default=30)
+    parser.add_argument("--size", type=int, default=64)
     args = parser.parse_args()
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    G = Generator(z_dim=args.z_dim, cond_dim=args.cond_dim).to(device)
+    G = Generator(z_dim=args.z_dim, cond_dim=args.cond_dim, size=args.size).to(device)
     state = torch.load(args.checkpoint, map_location=device)
     G.load_state_dict(state)
     G.eval()
