@@ -197,7 +197,13 @@ def gradient_penalty(D: nn.Module, real_x: torch.Tensor, fake_x: torch.Tensor, z
 
 
 def train(cfg: dict) -> None:
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    if torch.cuda.is_available():
+        device = "cuda"
+    elif torch.backends.mps.is_available():
+        device = "mps"
+    else:
+        device = "cpu"
+    print(f"Using device: {device}")
     dataset = EchoDataset(cfg["manifest"], frames=cfg["frames"], size=cfg["size"])
     loader = DataLoader(dataset, batch_size=cfg["batch_size"], shuffle=True, num_workers=2, drop_last=True)
 
