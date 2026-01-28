@@ -224,7 +224,7 @@ def train(cfg: dict) -> None:
             
             if i % 50 == 0:
                 print(f"[Epoch {epoch}/{cfg['epochs']}] [Batch {i}/{len(loader)}] "
-                      f"D_loss: {d_loss.item():.4f} (real: {real_loss.item():.4f}, fake: {fake_loss.item():.4f}) "
+                      f"D_loss: {d_loss.item():.4f} "
                       f"GE_loss: {ge_loss.item():.4f}")
 
         # Save checkpoints

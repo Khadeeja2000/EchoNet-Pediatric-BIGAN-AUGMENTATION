@@ -6,6 +6,7 @@ Dataset/
 data/raw/
 data/interim/
 data/processed/videos/
+data_numpy/
 
 # Python
 __pycache__/
@@ -16,5 +17,35 @@ venv/
 # Outputs
 logs/
 reports/
+
+# Large model checkpoints and generated outputs
+checkpoints/
+checkpoints_c3dgan/
+checkpoints_test_c3dgan/
+final_videos/
+final_videos_*/
+gradcam_results/
+samples_epoch*/
+augmentation/samples/
+augmentation/samples_highq/
+augmentation/stable_samples/
+test_generated/
+temporal_sr_results/
+genai_multimodal_results/
+masters_genai_results/
+view_translation_samples/
+cv_comparison/
+demo_analysis/
+presentation_images/
+genai_presentation_images/
+
+# Training logs
+*.log
+augmentation/*.log
+
+# Temporary files
+*.tmp
+*.swp
+*~
 
 
