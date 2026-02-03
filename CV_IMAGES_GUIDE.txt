@@ -1,0 +1,88 @@
+================================================================================
+CV PROJECT: IMAGES TO ADD WITH CAPTIONS
+================================================================================
+
+IMAGE 1: OPTICAL FLOW VISUALIZATION
+------------------------------------
+File: temporal_sr_results/flow_visualizations/flow_CR32a95e8-CR32a9abd-000032.jpg
+
+Caption: "Optical flow visualization showing motion patterns used for frame interpolation."
+
+Why: Shows the computer vision technique in action - demonstrates motion analysis.
+
+================================================================================
+
+IMAGE 2: FRAME COMPARISON (30 fps vs 60 fps)
+----------------------------------------------
+File: cv_comparison/interpolated_frames_clear.png
+
+Caption: "Frame interpolation: Original frames (left/right) with interpolated frames (middle) created using optical flow."
+
+Why: Clearly shows the interpolated frames that were created - visual proof of the technique.
+
+================================================================================
+
+IMAGE 3: BEFORE/AFTER COMPARISON
+---------------------------------
+File: cv_comparison/frame_comparison_30vs60.png
+
+Caption: "Comparison of original video (30 fps, top) and enhanced video (60 fps, bottom) showing doubled frame rate."
+
+Why: Shows the improvement - more frames in the enhanced version.
+
+================================================================================
+
+IMAGE 4: PROCESSING RESULTS TABLE
+----------------------------------
+Create a simple table showing:
+- Original: 30 fps, 37 frames
+- Enhanced: 60 fps, 73 frames
+- Interpolated: 36 frames
+
+Caption: "Processing results: Frame rate increased from 30 to 60 fps with 36 interpolated frames generated."
+
+Why: Shows quantitative results clearly.
+
+================================================================================
+
+RECOMMENDED IMAGES FOR REPORT:
+================================================================================
+
+MUST HAVE:
+1. Optical Flow Visualization
+   - Shows the CV technique
+   - Demonstrates motion analysis
+   - Caption: "Optical flow visualization showing motion patterns used for frame interpolation."
+
+2. Frame Interpolation Example
+   - Shows interpolated frames clearly
+   - Visual proof of technique
+   - Caption: "Frame interpolation: Original frames with interpolated frames created using optical flow."
+
+OPTIONAL:
+3. Before/After Comparison
+   - Shows improvement
+   - Caption: "Comparison of original (30 fps) and enhanced (60 fps) videos."
+
+4. Results Table/Chart
+   - Quantitative results
+   - Caption: "Processing results: Frame rate increased from 30 to 60 fps."
+
+================================================================================
+QUICK REFERENCE:
+================================================================================
+
+Image 1: flow_visualizations/*.jpg
+Caption: "Optical flow visualization showing motion patterns used for frame interpolation."
+
+Image 2: cv_comparison/interpolated_frames_clear.png
+Caption: "Frame interpolation: Original frames with interpolated frames created using optical flow."
+
+Image 3: cv_comparison/frame_comparison_30vs60.png
+Caption: "Comparison of original (30 fps) and enhanced (60 fps) videos."
+
+================================================================================
+
+
+
+
